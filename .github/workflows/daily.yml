@@ -1,33 +1,124 @@
-name: Daily Monitoring
+import asyncio
+import base64
+import json
+import os
+import re
+from datetime import datetime
+import pandas as pd
+from playwright.async_api import async_playwright
+import requests
 
-on:
-  schedule:
-    - cron: '0 0 * * *' # 毎日午前9時(JST)に自動実行
-  workflow_dispatch: # 手動実行ボタン
+SITES = [
+    {
+        "name": "リタリコ求人ナビ",
+        "url": "https://snabi.jp/",
+        "selector": "[data-recruitment-count]",
+    },
+    {
+        "name": "スグJOB",
+        "url": "https://sugujob.jp/shougaisha/",
+        "selector": "strong[class*='_jobCountValue_']",
+    },
+    {
+        "name": "atGP",
+        "url": "https://www.atgp.jp/",
+        "selector": ".p-content-box__heading__text__number",
+    },
+    {
+        "name": "障害者雇用バンク",
+        "url": "https://syogai-koyo-bank.com/company-job/",
+        "selector": "#topSearchBarCountNum, .topSearchBarCountNum",
+    },
+    {
+        "name": "dodaチャレンジ",
+        "url": "https://doda.jp/challenge/kyujin/",
+        "selector": ".allJobCount, #allJobCount, [class*='allJobCount']",
+    },
+    {
+        "name": "babnavi",
+        "url": "https://bab-navi.dandi.co.jp/zenkoku/search-result",
+        "selector": ".num-txt",
+    },
+]
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # 書き込み権限を許可
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+# 会社アカウントで弾かれる可能性があるため、エラーで止めない設定
+GAS_WEBHOOK_URL = "https://script.google.com/a/macros/bm-sms.co.jp/s/AKfycbyOk5msvdGZuNYQDzIry0GR5T2sd-3-cAxROCH88E0fo2Sy2C-lDyYMveq7QTIgIJyy/exec"
 
-      - name: Install dependencies
-        run: |
-          pip install playwright pandas requests
-          playwright install --with-deps chromium
 
-      - name: Run Scraper
-        run: python main.py
+async def scrape_site(page, site):
+  now_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+  count = "0"
+  img_path = ""
 
-      - name: Save changes
-        run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
-          git add screenshots/ job_history.csv || true
-          git commit -m "Auto update: $(date)" || exit 0
-          git push || true
+  try:
+    await page.goto(site["url"], wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(3000)
+
+    element = await page.query_selector(site["selector"])
+    text = await element.inner_text() if element else "0"
+    count = re.sub(r"\D", "", text)
+
+    os.makedirs("screenshots", exist_ok=True)
+    now_str = datetime.now().strftime("%Y%m%d_%H%M")
+    img_path = f"screenshots/{site['name']}_{now_str}.png"
+    await page.screenshot(path=img_path, full_page=True)
+
+    print(f"[{site['name']}] 取得成功: {count}件")
+  except Exception as e:
+    print(f"[{site['name']}] 画面取得エラー: {e}")
+
+  # GAS送信処理（エラーが起きても全体を止めない）
+  try:
+    encoded_image = ""
+    if img_path and os.path.exists(img_path):
+      with open(img_path, "rb") as f:
+        encoded_image = base64.b64encode(f.read()).decode("utf-8")
+
+    payload = {
+        "date": now_date,
+        "site_name": site["name"],
+        "count": count,
+        "image": encoded_image,
+    }
+    requests.post(GAS_WEBHOOK_URL, data=json.dumps(payload), timeout=10)
+  except Exception as e:
+    print(f"[{site['name']}] GAS送信スキップ (エラー無視): {e}")
+
+  return {"date": now_date, "site_name": site["name"], "count": count}
+
+
+async def main():
+  async with async_playwright() as p:
+    browser = await p.chromium.launch(headless=True)
+    context = await browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+    )
+    page = await context.new_page()
+
+    results = []
+    for site in SITES:
+      res = await scrape_site(page, site)
+      results.append(res)
+      await page.wait_for_timeout(2000)
+
+    await browser.close()
+
+    # CSVファイルへの保存
+    if results:
+      log_file = "job_history.csv"
+      df = pd.DataFrame(results)
+      df.to_csv(
+          log_file,
+          mode="a",
+          header=not os.path.exists(log_file),
+          index=False,
+          encoding="utf-8-sig",
+      )
+
+
+if __name__ == "__main__":
+  asyncio.run(main())
