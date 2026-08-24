@@ -2,14 +2,14 @@ name: Daily Monitoring
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 毎日日本時間の午前9時に自動実行
-  workflow_dispatch: # 手動実行ボタンを表示
+    - cron: '0 0 * * *' # 毎日午前9時(JST)に自動実行
+  workflow_dispatch: # 手動実行ボタン
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # 書き込み権限を明示
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,10 +24,10 @@ jobs:
       - name: Run Scraper
         run: python main.py
 
-      - name: Commit and Push
+      - name: Save changes
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git add screenshots/ job_history.csv
+          git add screenshots/ job_history.csv || true
           git commit -m "Auto update: $(date)" || exit 0
           git push
