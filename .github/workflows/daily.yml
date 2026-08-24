@@ -9,7 +9,7 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 書き込み権限を明示
+      contents: write # 書き込み権限を許可
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,7 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright pandas
+          pip install playwright pandas requests
           playwright install --with-deps chromium
 
       - name: Run Scraper
@@ -30,4 +30,4 @@ jobs:
           git config --global user.email "action@github.com"
           git add screenshots/ job_history.csv || true
           git commit -m "Auto update: $(date)" || exit 0
-          git push
+          git push || true
